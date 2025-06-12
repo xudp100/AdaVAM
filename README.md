@@ -26,5 +26,5 @@ This will install the following dependencies:
 Basic Training
 
 ```bash
-python main.py --optimizer AdaVAM
+python classification_cifar100/main.py --optimizer AdaVAM
 ```
