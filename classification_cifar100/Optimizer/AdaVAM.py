@@ -3,7 +3,7 @@ from torch.optim.optimizer import Optimizer
 
 
 class AdaVAM(Optimizer):
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), q=0.58, weight_decay=0):
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), partial=0.58, weight_decay=0):
         """
         Implements AdaVAM: Adaptive Variance-Aware Momentum for Accelerating Deep Neural Network Training.
 
@@ -12,10 +12,10 @@ class AdaVAM(Optimizer):
             lr (float, optional): learning rate η (default: 1e-3)
             betas (Tuple[float, float], optional): coefficients β₁, β₂ for momentum
                 and scalar variance estimation (default: (0.9, 0.999))
-            q (float, optional): denominator scaling exponent (default: 0.58)
+            partial (float, optional): denominator scaling exponent (default: 0.58)
             weight_decay (float, optional): weight decay λ (L2 penalty) (default: 0)
         """
-        defaults = dict(lr=lr, betas=betas, q=q, weight_decay=weight_decay)
+        defaults = dict(lr=lr, betas=betas, partial=partial, weight_decay=weight_decay)
         super(AdaVAM, self).__init__(params, defaults)
 
     @torch.no_grad()
@@ -40,28 +40,27 @@ class AdaVAM(Optimizer):
                 if len(state) == 0:
                     state['step'] = 0
                     state['m_buffer'] = torch.zeros_like(p)  # Momentum buffer m
-                    state['s_buffer'] = torch.zeros_like(p)  # Scalar variance buffer s
+                    state['v_buffer'] = torch.zeros_like(p)  # Scalar variance buffer v
 
-                m_buffer, s_buffer = state['m_buffer'], state['s_buffer']
+                m_buffer, v_buffer = state['m_buffer'], state['v_buffer']
                 state['step'] += 1
                 beta1, beta2 = group['betas']
 
-                # Compute χ² = 1/(10^{5q}) for denominator stability
-                chi2 = 1 / (10 ** (5 * group['q']))
+                # Compute eps = 1/(10^{5p}) for denominator stability
+                eps = 1 / (10 ** (5 * group['partial']))
 
-                # Step 2: Normalize gradient ĝₜ = gₜ / max(s^q, χ²)
-                # Note: s_buffer contains s_{t-1} from previous step
+                # Step 2: Normalize gradient ĝₜ
                 normalized_grad = grad / torch.max(
-                    torch.pow(s_buffer, group['q']),
-                    torch.tensor(chi2, device=grad.device)
+                    torch.pow(v_buffer, group['partial']),
+                    torch.tensor(eps, device=grad.device)
                 )
 
                 # Step 3: Update momentum buffer mₜ = β₁m_{t-1} + (1-β₁)ĝₜ
                 m_buffer.mul_(beta1).add_(normalized_grad, alpha=1 - beta1)
 
-                # Step 4: Update scalar variance sₜ = β₂s_{t-1} + (1-β₂)Mean(gₜ²)
+                # Step 4: Update scalar variance vₜ = β₂s_{t-1} + (1-β₂)Mean(gₜ²)
                 # Use mean of squared gradients for scalar variance
-                s_buffer.mul_(beta2).add_(torch.mean(grad * grad), alpha=1 - beta2)
+                v_buffer.mul_(beta2).add_(torch.mean(grad * grad), alpha=1 - beta2)
 
                 # Step 5: Parameter update θₜ = θ_{t-1} - ηmₜ
                 p.add_(m_buffer, alpha=-group['lr'])
